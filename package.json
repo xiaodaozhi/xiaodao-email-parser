@@ -1,0 +1,47 @@
+{
+  "name": "xiaodao-msg-parser",
+  "version": "1.0.0",
+  "description": "Node.js parser for Outlook .msg files (Compound File Binary / OLE2 format)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:example": "node --import tsx examples/parse.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "msg",
+    "outlook",
+    "email",
+    "parser",
+    "ole2",
+    "cfb",
+    "mapi",
+    "microsoft"
+  ],
+  "author": "",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "bugs": {
+    "url": ""
+  },
+  "homepage": "",
+  "dependencies": {
+    "cfb": "^1.2.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
