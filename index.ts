@@ -1,4 +1,4 @@
-import MsgParser from './src/msg-parser';
+import MsgParser from './src/msg-parser.js';
 export default MsgParser;
 export type {
   ParsedEmail,
@@ -6,4 +6,4 @@ export type {
   EmailAttachment,
   RecipientInfo,
   EmailAttachmentInfo,
-} from './src/types';
+} from './src/types.js';

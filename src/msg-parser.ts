@@ -8,7 +8,7 @@ import {
   RECIPIENT_TYPES,
   IMPORTANCE,
   FILETIME_EPOCH_OFFSET,
-} from './constants';
+} from './constants.js';
 import type {
   ParsedEmail,
   EmailRecipient,
@@ -19,7 +19,7 @@ import type {
   SubStorageBucket,
   PropertyTypeInfo,
   TypedReadResult,
-} from './types';
+} from './types.js';
 
 /**
  * Parser for Outlook .msg files (Compound File Binary / OLE2 format).

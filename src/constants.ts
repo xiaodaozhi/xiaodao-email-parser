@@ -1,6 +1,6 @@
 // server/utils/tools/msgparser/constants.ts
 
-import type { PropertyTypeInfo } from './types';
+import type { PropertyTypeInfo } from './types.js';
 
 // ---------------------------------------------------------------------------
 //  MAPI Property ID → canonical name map
