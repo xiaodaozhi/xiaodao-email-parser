@@ -1,6 +1,6 @@
 {
   "name": "xiaodao-msg-parser",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Node.js parser for Outlook .msg files (Compound File Binary / OLE2 format)",
   "type": "module",
   "license": "MIT",
