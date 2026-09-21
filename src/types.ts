@@ -1,8 +1,29 @@
-// server/utils/tools/msgparser/types.ts
-
 // ---------------------------------------------------------------------------
 //  Public API types
 // ---------------------------------------------------------------------------
+
+export type EmailFormat = 'msg' | 'eml';
+
+export type EmailFormatHint = EmailFormat | 'auto';
+
+export interface ParseOptions {
+  /** Force a format, or use signature/header based detection (default). */
+  format?: EmailFormatHint;
+}
+
+export interface EmlParserOptions {
+  /** Maximum accepted source size. Defaults to 100 MiB. */
+  maxInputSize?: number;
+  rfc822Attachments?: boolean;
+  forceRfc822Attachments?: boolean;
+  maxNestingDepth?: number;
+  maxHeadersSize?: number;
+  maxRfc822NestingDepth?: number;
+}
+
+export interface EmailParserOptions {
+  eml?: EmlParserOptions;
+}
 
 export interface EmailRecipient {
   name: string | null;
@@ -19,8 +40,10 @@ export interface EmailAttachment {
 }
 
 export interface ParsedEmail {
+  format: EmailFormat;
   subject: string | null;
   from: EmailRecipient | null;
+  replyTo: EmailRecipient[];
   to: EmailRecipient[];
   cc: EmailRecipient[];
   bcc: EmailRecipient[];
@@ -37,6 +60,7 @@ export interface ParsedEmail {
   messageSize: number | null;
   conversationTopic: string | null;
   normalizedSubject: string | null;
+  messageId: string | null;
   headers: string | null;
   parsedHeaders: Record<string, string> | null;
   preview: string | null;
@@ -66,11 +90,7 @@ export interface RawEmailData {
   properties: Record<string, unknown>;
   recipients: RecipientInfo[];
   attachments: EmailAttachmentInfo[];
-}
-
-export interface TaggedValue {
-  value: unknown;
-  type: number;
+  size?: number;
 }
 
 export interface SubStorageBucket {
@@ -88,9 +108,4 @@ export interface EntryStore {
 export interface PropertyTypeInfo {
   name: string;
   fixedSize: number;
-}
-
-export interface TypedReadResult<T = unknown> {
-  value: T | undefined;
-  bytesRead: number;
 }

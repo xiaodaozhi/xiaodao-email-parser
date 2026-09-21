@@ -1,5 +1,3 @@
-// server/utils/tools/msgparser/constants.ts
-
 import type { PropertyTypeInfo } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -15,19 +13,17 @@ const PROPERTY_ENTRIES: [string, string][] = [
 
   // Sender
   ['0c1a', 'senderName'],
-  ['0c1e', 'senderEmail'],
-  ['0c1b', 'senderName'],       // Unicode variant
-  ['0c1f', 'senderEmail'],      // Unicode variant
-  ['0041', 'senderName'],       // Sent Representing Name
-  ['0042', 'senderEmail'],      // Sent Representing Email Address
-  ['0064', 'senderEmail'],      // Sent Representing Email Address (Unicode)
+  ['0c1f', 'senderEmail'],
+  ['5d01', 'senderSmtpEmail'],
+  ['0042', 'sentRepresentingName'],
+  ['0065', 'sentRepresentingEmail'],
+  ['5d02', 'sentRepresentingSmtpEmail'],
 
   // Body
-  ['007d', 'body'],
-  ['1000', 'bodyHtml'],
-  ['1013', 'bodyRtf'],
-  ['1009', 'preview'],
-  ['0c79', 'preview'],          // Preview / PidTagPreview
+  ['1000', 'body'],
+  ['1013', 'bodyHtml'],
+  ['1009', 'bodyRtfCompressed'],
+  ['3fd9', 'preview'],
 
   // Dates
   ['0039', 'clientSubmitTime'],
@@ -36,40 +32,34 @@ const PROPERTY_ENTRIES: [string, string][] = [
   ['3008', 'lastModificationTime'],
 
   // Message info
-  ['0e03', 'importance'],
-  ['0e04', 'messageClass'],
-  ['0e02', 'messageSize'],
+  ['0017', 'importance'],
+  ['001a', 'messageClass'],
+  ['0e08', 'messageSize'],
   ['0e07', 'messageFlags'],
-  ['0c17', 'internetCodePage'],
-  ['3ff9', 'internetHeaders'],
+  ['3fde', 'internetCodePage'],
+  ['007d', 'internetHeaders'],
 
   // Conversation
   ['0070', 'conversationTopic'],
-  ['0075', 'conversationIndex'],
+  ['0071', 'conversationIndex'],
 
   // Recipient properties
   ['3001', 'displayName'],
-  ['3002', 'simpleDisplayName'],
-  ['3003', 'emailAddressType'],
+  ['3002', 'emailAddressType'],
+  ['3003', 'emailAddress'],
   ['39fe', 'smtpEmailAddress'],
-  ['0c15', 'recipientDisplayName'],
-  ['0c17', 'recipientEmailAddress'],
-  ['0c1d', 'recipientName'],
-  ['0e21', 'recipientType'],
-  ['0e12', 'recipientStatus'],
+  ['5ff6', 'recipientDisplayName'],
+  ['0c15', 'recipientType'],
 
   // Attachment properties
   ['3701', 'attachmentData'],
-  ['3703', 'attachmentFilename'],
-  ['3704', 'attachmentLongFilename'],
-  ['3705', 'attachmentMimeType'],
-  ['3707', 'attachmentContentType'],
-  ['370a', 'attachmentMethod'],
-  ['370b', 'attachmentEncoding'],
-  ['370e', 'attachmentContentLocation'],
-  ['3710', 'attachmentFlags'],
+  ['3704', 'attachmentFilename'],
+  ['3705', 'attachmentMethod'],
+  ['3707', 'attachmentLongFilename'],
+  ['370e', 'attachmentMimeType'],
   ['3712', 'attachmentContentId'],
-  ['3713', 'attachmentContentIdObj'],
+  ['3713', 'attachmentContentLocation'],
+  ['0e20', 'attachmentSize'],
 ];
 
 export const PROPERTY_IDS: Record<string, string> = Object.fromEntries(PROPERTY_ENTRIES);

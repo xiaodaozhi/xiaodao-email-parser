@@ -1,5 +1,3 @@
-// server/utils/tools/msgparser/cfb-types.d.ts
-
 declare module 'cfb' {
   interface CFBEntry {
     name: string;

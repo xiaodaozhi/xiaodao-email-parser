@@ -1,5 +1,3 @@
-// server/utils/tools/msgparser/msg-parser.ts
-
 import CFB from 'cfb';
 import fs from 'node:fs';
 import {
@@ -9,6 +7,16 @@ import {
   IMPORTANCE,
   FILETIME_EPOCH_OFFSET,
 } from './constants.js';
+import {
+  createPreview,
+  decodeBuffer,
+  normalizeContentId,
+  normalizeSubject,
+  parseAddressHeader,
+  parseHeaderBlock,
+  toValidDate,
+} from './email-utils.js';
+import { decompressRtf } from './rtf.js';
 import type {
   ParsedEmail,
   EmailRecipient,
@@ -17,8 +25,6 @@ import type {
   RawEmailData,
   EntryStore,
   SubStorageBucket,
-  PropertyTypeInfo,
-  TypedReadResult,
 } from './types.js';
 
 /**
@@ -31,6 +37,7 @@ import type {
  */
 class MsgParser {
   private cfb!: ReturnType<typeof CFB.read>;
+  private sourceSize = 0;
   private _entries: EntryStore = {
     topPropsStream: null,
     topSubstg: {},
@@ -49,15 +56,17 @@ class MsgParser {
     if (!Buffer.isBuffer(buffer)) {
       throw new TypeError('Input must be a Buffer. Use parseFile() for file paths.');
     }
+    this.sourceSize = buffer.length;
     try {
       this.cfb = CFB.read(buffer, { type: 'buffer' });
     } catch (err: unknown) {
-      if (err instanceof Error && err.message && err.message.includes('Header Signature')) {
-        throw new Error('Invalid .msg file: header signature mismatch. The file may be corrupted or not an Outlook .msg file.');
-      }
-      throw err;
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Invalid .msg file: ${detail}`, { cause: err });
     }
     this._classifyEntries();
+    if (!this._entries.topPropsStream || this._entries.topPropsStream.length < 32) {
+      throw new Error('Invalid .msg file: the root MAPI property stream is missing or truncated.');
+    }
     return this._assembleMessage();
   }
 
@@ -147,20 +156,6 @@ class MsgParser {
     }
   }
 
-  private _classifySubLevel(path: string, name: string, content: Buffer): void {
-    const parent = this._parentPath(path);
-    let storageName = parent;
-    if (storageName.startsWith('/')) storageName = storageName.slice(1);
-
-    if (storageName.startsWith('__recip_version1.0_#')) {
-      const idx = storageName.slice('__recip_version1.0_#'.length);
-      this._addToBucket(this._entries.recipients, idx, name, content);
-    } else if (storageName.startsWith('__attach_version1.0_#')) {
-      const idx = storageName.slice('__attach_version1.0_#'.length);
-      this._addToBucket(this._entries.attachments, idx, name, content);
-    }
-  }
-
   private _addToBucket(
     bucket: Record<string, SubStorageBucket>,
     idx: string,
@@ -189,7 +184,7 @@ class MsgParser {
     const tags: Record<string, unknown> = {};
 
     if (this._entries.topPropsStream) {
-      const streamProps = this._readPropertyStream(this._entries.topPropsStream);
+      const streamProps = this._readPropertyStream(this._entries.topPropsStream, 32);
       Object.assign(tags, streamProps);
     }
 
@@ -202,6 +197,7 @@ class MsgParser {
       properties: this._resolveProperties(tags),
       recipients: this._parseRecipients(),
       attachments: this._parseAttachments(),
+      size: this.sourceSize,
     };
   }
 
@@ -209,63 +205,41 @@ class MsgParser {
   //  Property stream reader (__properties_version1.0)
   // ------------------------------------------------------------------
 
-  private _readPropertyStream(buf: Buffer): Record<string, unknown> {
+  private _readPropertyStream(buf: Buffer, headerSize = 8): Record<string, unknown> {
     const result: Record<string, unknown> = {};
-    let offset = 8;
+    let offset = headerSize;
 
-    while (offset + 8 <= buf.length) {
+    // [MS-OXMSG] defines every property entry as exactly 16 bytes. Variable
+    // values live in sibling __substg1.0_* streams; only fixed values are
+    // stored in the final eight bytes of an entry.
+    while (offset + 16 <= buf.length) {
       const propertyTag = buf.readUInt32LE(offset);
       if (propertyTag === 0) break;
-
-      offset += 8;
 
       const propId = (propertyTag >>> 16) & 0xffff;
       const propType = propertyTag & 0xffff;
       const tagStr = this._makeTagStr(propId, propType);
+      const info = PROPERTY_TYPES[propType];
 
-      try {
-        const { value, bytesRead } = this._readTypedValue(buf, offset, propType);
+      if (info?.fixedSize && info.fixedSize > 0 && info.fixedSize <= 8) {
+        const value = this._readFixedValue(buf, offset + 8, propType, info.fixedSize);
         if (value !== undefined) result[tagStr] = value;
-        offset += bytesRead;
-      } catch {
-        const skip = this._guessValueSize(propType);
-        if (skip > 0) offset += skip;
-        else break;
       }
+      offset += 16;
     }
 
     return result;
   }
 
-  private _readTypedValue(buf: Buffer, offset: number, type: number): TypedReadResult {
-    const info: PropertyTypeInfo | undefined = PROPERTY_TYPES[type];
-
-    if (!info) {
-      const guessed = this._guessValueSize(type);
-      return { value: undefined, bytesRead: guessed > 0 ? guessed : 0 };
-    }
-
-    if (info.fixedSize > 0) {
-      return this._readFixedValue(buf, offset, type, info.fixedSize);
-    }
-    if (info.fixedSize === -1) {
-      return this._readVariableValue(buf, offset, type);
-    }
-    if (info.fixedSize === -2) {
-      return this._readMultiValue(buf, offset, type);
-    }
-
-    return { value: undefined, bytesRead: 0 };
-  }
-
-  private _readFixedValue(buf: Buffer, offset: number, type: number, size: number): TypedReadResult {
+  private _readFixedValue(buf: Buffer, offset: number, type: number, size: number): unknown | undefined {
+    if (offset < 0 || offset + size > buf.length) return undefined;
     let value: unknown;
     switch (type) {
       case 0x0002:
         value = buf.readInt16LE(offset);
         break;
       case 0x0003:
-        value = buf.readUInt32LE(offset);
+        value = buf.readInt32LE(offset);
         break;
       case 0x0004:
         value = buf.readFloatLE(offset);
@@ -283,82 +257,12 @@ class MsgParser {
         value = Number(buf.readBigInt64LE(offset));
         break;
       case 0x0040:
-        value = buf.readUInt32LE(offset) + buf.readUInt32LE(offset + 4) * 0x100000000;
+        value = Number(buf.readBigUInt64LE(offset));
         break;
       default:
         value = buf.slice(offset, offset + size);
     }
-    return { value, bytesRead: size };
-  }
-
-  private _readVariableValue(buf: Buffer, offset: number, type: number): TypedReadResult {
-    if (offset + 4 > buf.length) return { value: undefined, bytesRead: 0 };
-
-    const byteCount = buf.readUInt32LE(offset);
-    if (byteCount === 0 || offset + 4 + byteCount > buf.length) {
-      return { value: undefined, bytesRead: 4 };
-    }
-
-    const dataStart = offset + 4;
-    let value: unknown;
-
-    switch (type) {
-      case 0x001e:
-        value = buf.toString('latin1', dataStart, dataStart + byteCount).replace(/\0+$/, '');
-        break;
-      case 0x001f:
-        value = buf.toString('ucs2', dataStart, dataStart + byteCount).replace(/\0+$/, '');
-        break;
-      case 0x0102:
-        value = Buffer.from(buf.slice(dataStart, dataStart + byteCount));
-        break;
-      default:
-        value = Buffer.from(buf.slice(dataStart, dataStart + byteCount));
-    }
-
-    return { value, bytesRead: 4 + byteCount };
-  }
-
-  private _readMultiValue(buf: Buffer, offset: number, type: number): TypedReadResult {
-    if (offset + 4 > buf.length) return { value: undefined, bytesRead: 0 };
-    const count = buf.readUInt32LE(offset);
-    offset += 4;
-    const values: unknown[] = [];
-    let totalBytes = 4;
-
-    for (let i = 0; i < count; i++) {
-      if (offset >= buf.length) break;
-
-      const elemType = type & 0x0fff;
-      const elemInfo: PropertyTypeInfo | undefined = PROPERTY_TYPES[elemType];
-
-      if (elemInfo && elemInfo.fixedSize > 0) {
-        const { value, bytesRead } = this._readFixedValue(buf, offset, elemType, elemInfo.fixedSize);
-        values.push(value);
-        offset += bytesRead;
-        totalBytes += bytesRead;
-      } else if (elemInfo && elemInfo.fixedSize === -1) {
-        if (offset + 4 > buf.length) break;
-        const elemLen = buf.readUInt32LE(offset);
-        offset += 4;
-        totalBytes += 4;
-        const elemEnd = Math.min(offset + elemLen, buf.length);
-        const raw = buf.slice(offset, elemEnd);
-        if (elemType === 0x001f) {
-          values.push(raw.toString('ucs2').replace(/\0+$/, ''));
-        } else if (elemType === 0x001e) {
-          values.push(raw.toString('latin1').replace(/\0+$/, ''));
-        } else {
-          values.push(Buffer.from(raw));
-        }
-        totalBytes += (elemEnd - offset);
-        offset = elemEnd;
-      } else {
-        break;
-      }
-    }
-
-    return { value: values, bytesRead: totalBytes };
+    return value;
   }
 
   // ------------------------------------------------------------------
@@ -376,19 +280,19 @@ class MsgParser {
       case 0x0102:
         return Buffer.from(content);
       case 0x0003:
-        return content.readUInt32LE(0);
+        return content.length >= 4 ? content.readInt32LE(0) : undefined;
       case 0x0002:
-        return content.readInt16LE(0);
+        return content.length >= 2 ? content.readInt16LE(0) : undefined;
       case 0x000b:
-        return content.readUInt16LE(0) !== 0;
+        return content.length >= 2 ? content.readUInt16LE(0) !== 0 : undefined;
       case 0x0014:
-        return Number(content.readBigInt64LE(0));
+        return content.length >= 8 ? Number(content.readBigInt64LE(0)) : undefined;
       case 0x0040:
-        return Number(content.readBigUInt64LE(0));
+        return content.length >= 8 ? Number(content.readBigUInt64LE(0)) : undefined;
       case 0x0004:
-        return content.readFloatLE(0);
+        return content.length >= 4 ? content.readFloatLE(0) : undefined;
       case 0x0005:
-        return content.readDoubleLE(0);
+        return content.length >= 8 ? content.readDoubleLE(0) : undefined;
       default:
         return content;
     }
@@ -415,11 +319,15 @@ class MsgParser {
     }
 
     const result: Record<string, unknown> = {};
-    for (const [name, { value }] of Object.entries(named)) {
-      result[name] = value;
+    const codePageEntry = named.internetCodePage?.value;
+    const codePage = typeof codePageEntry === 'number' ? codePageEntry : undefined;
+    for (const [name, { value, type }] of Object.entries(named)) {
+      result[name] = type === 0x001e && typeof value === 'string' && codePage
+        ? decodeBuffer(Buffer.from(value, 'latin1'), codePage)
+        : value;
 
-      if (name.endsWith('Time') && typeof value === 'number' && value > 0) {
-        result[name] = this._fileTimeToDate(value);
+      if (name.endsWith('Time') && typeof result[name] === 'number' && result[name] > 0) {
+        result[name] = this._fileTimeToDate(result[name] as number);
       }
     }
 
@@ -430,10 +338,13 @@ class MsgParser {
       }
     }
 
-    if (result.senderName || result.senderEmail) {
+    const senderName = result.sentRepresentingName || result.senderName;
+    const senderEmail = result.sentRepresentingSmtpEmail || result.sentRepresentingEmail ||
+      result.senderSmtpEmail || result.senderEmail;
+    if (senderName || senderEmail) {
       result.from = {
-        name: (result.senderName as string) || null,
-        email: (result.senderEmail as string) || null,
+        name: (senderName as string) || null,
+        email: (senderEmail as string) || null,
       };
     }
 
@@ -469,8 +380,8 @@ class MsgParser {
       const props = this._resolveProperties(tags);
 
       const recipient: RecipientInfo = {
-        name: (props.recipientDisplayName as string) || (props.displayName as string) || (props.recipientName as string) || null,
-        email: (props.smtpEmailAddress as string) || (props.recipientEmailAddress as string) || null,
+        name: (props.recipientDisplayName as string) || (props.displayName as string) || null,
+        email: (props.smtpEmailAddress as string) || (props.emailAddress as string) || null,
         type: RECIPIENT_TYPES[props.recipientType as number] || null,
       };
 
@@ -502,15 +413,15 @@ class MsgParser {
       }
 
       const props = this._resolveProperties(tags);
-      const data = (props.attachmentData as Buffer) || null;
+      const data = Buffer.isBuffer(props.attachmentData) ? props.attachmentData : null;
 
       const attachment: EmailAttachmentInfo = {
         filename: (props.attachmentLongFilename as string) || (props.attachmentFilename as string) || null,
         content: data,
-        contentType: (props.attachmentContentType as string) || (props.attachmentMimeType as string) || 'application/octet-stream',
-        contentId: (props.attachmentContentId as string) || null,
+        contentType: (props.attachmentMimeType as string) || 'application/octet-stream',
+        contentId: normalizeContentId(props.attachmentContentId as string | undefined),
         contentLocation: (props.attachmentContentLocation as string) || null,
-        size: data ? data.length : 0,
+        size: data ? data.length : (props.attachmentSize as number) || 0,
       };
 
       result.push(attachment);
@@ -532,56 +443,106 @@ class MsgParser {
     let cc = recipients.filter(r => r.type === 'cc');
     let bcc = recipients.filter(r => r.type === 'bcc');
 
+    let rawHeaders: string | null = null;
     let parsedHeaders: Record<string, string> | null = null;
     if (p.internetHeaders) {
       if (typeof p.internetHeaders === 'string') {
-        parsedHeaders = this._parseHeaders(p.internetHeaders);
+        rawHeaders = p.internetHeaders;
       } else if (Buffer.isBuffer(p.internetHeaders)) {
-        parsedHeaders = this._parseBinaryHeaders(p.internetHeaders);
+        rawHeaders = this._decodeBinaryHeaders(p.internetHeaders);
       }
+      parsedHeaders = rawHeaders ? this._parseHeaders(rawHeaders) : null;
     }
 
+    let headerFrom: EmailRecipient | null = null;
+    let replyTo: EmailRecipient[] = [];
     if (parsedHeaders && Object.keys(parsedHeaders).length > 0) {
       const fromHeaders = this._parseRecipientsFromHeaders(parsedHeaders);
-      if (to.length === 0) to = fromHeaders.to;
-      if (cc.length === 0) cc = fromHeaders.cc;
-      if (bcc.length === 0) bcc = fromHeaders.bcc;
+      to = this._mergeRecipients(to, fromHeaders.to);
+      cc = this._mergeRecipients(cc, fromHeaders.cc);
+      bcc = this._mergeRecipients(bcc, fromHeaders.bcc);
+      headerFrom = parseAddressHeader(parsedHeaders.from)[0] ?? null;
+      replyTo = parseAddressHeader(parsedHeaders['reply-to']);
     }
 
-    if (to.length === 0 && p.body && typeof p.body === 'string') {
-      const bodyHeaders = this._parseHeadersFromBody(p.body);
+    const codePage = typeof p.internetCodePage === 'number' ? p.internetCodePage : undefined;
+    const body = typeof p.body === 'string'
+      ? p.body
+      : Buffer.isBuffer(p.body) ? decodeBuffer(p.body, codePage) : null;
+    const bodyHtml = typeof p.bodyHtml === 'string'
+      ? p.bodyHtml
+      : Buffer.isBuffer(p.bodyHtml) ? decodeBuffer(p.bodyHtml, codePage) : null;
+    const bodyRtf = Buffer.isBuffer(p.bodyRtfCompressed)
+      ? decompressRtf(p.bodyRtfCompressed)
+      : typeof p.bodyRtfCompressed === 'string' ? p.bodyRtfCompressed : null;
+
+    if (to.length === 0 && body) {
+      const bodyHeaders = this._parseHeadersFromBody(body);
       if (bodyHeaders) {
         const fromBody = this._parseRecipientsFromHeaders(bodyHeaders);
-        if (to.length === 0) to = fromBody.to;
-        if (cc.length === 0) cc = fromBody.cc;
-        if (bcc.length === 0) bcc = fromBody.bcc;
+        to = this._mergeRecipients(to, fromBody.to);
+        cc = this._mergeRecipients(cc, fromBody.cc);
+        bcc = this._mergeRecipients(bcc, fromBody.bcc);
       }
     }
 
+    const subject = (p.subject as string) || parsedHeaders?.subject || null;
+    const importance = p.importance === 'low' || p.importance === 'high' || p.importance === 'normal'
+      ? p.importance
+      : 'normal';
+
     return {
-      subject: (p.subject as string) || null,
-      from: (p.from as EmailRecipient) || null,
+      format: 'msg',
+      subject,
+      from: this._mergeSender((p.from as EmailRecipient) || null, headerFrom),
+      replyTo,
       to: to.length > 0 ? to.map(r => ({ name: r.name, email: r.email })) : [],
       cc: cc.length > 0 ? cc.map(r => ({ name: r.name, email: r.email })) : [],
       bcc: bcc.length > 0 ? bcc.map(r => ({ name: r.name, email: r.email })) : [],
-      body: (p.body as string) || null,
-      bodyHtml: (p.bodyHtml as string) || null,
-      bodyRtf: (p.bodyRtf as string) || null,
+      body,
+      bodyHtml,
+      bodyRtf,
       attachments,
-      sentDate: (p.clientSubmitTime as Date) || null,
+      sentDate: (p.clientSubmitTime as Date) || toValidDate(parsedHeaders?.date),
       receivedDate: (p.messageDeliveryTime as Date) || null,
       createdDate: (p.creationTime as Date) || null,
       modifiedDate: (p.lastModificationTime as Date) || null,
       messageClass: (p.messageClass as string) || null,
-      importance: (p.importance as 'low' | 'normal' | 'high') || 'normal',
-      messageSize: (p.messageSize as number) || null,
+      importance,
+      messageSize: typeof p.messageSize === 'number' ? p.messageSize : (raw.size ?? null),
       conversationTopic: (p.conversationTopic as string) || null,
-      normalizedSubject: (p.normalizedSubject as string) || null,
-      headers: (p.internetHeaders as string) || null,
+      normalizedSubject: (p.normalizedSubject as string) || normalizeSubject(subject),
+      messageId: parsedHeaders?.['message-id'] || null,
+      headers: rawHeaders,
       parsedHeaders,
-      preview: (p.preview as string) || null,
+      preview: (p.preview as string) || createPreview(body, bodyHtml),
       _rawProperties: p,
     };
+  }
+
+  private _mergeRecipients(primary: RecipientInfo[], fallback: RecipientInfo[]): RecipientInfo[] {
+    if (primary.length === 0) return fallback;
+    if (fallback.length !== primary.length) return primary;
+    return primary.map((recipient, index) => ({
+      name: recipient.name || fallback[index]?.name || null,
+      email: this._isSmtpAddress(recipient.email)
+        ? recipient.email
+        : fallback[index]?.email || recipient.email || null,
+      type: recipient.type,
+    }));
+  }
+
+  private _mergeSender(primary: EmailRecipient | null, fallback: EmailRecipient | null): EmailRecipient | null {
+    if (!primary) return fallback;
+    if (!fallback) return primary;
+    return {
+      name: primary.name || fallback.name,
+      email: this._isSmtpAddress(primary.email) ? primary.email : fallback.email || primary.email,
+    };
+  }
+
+  private _isSmtpAddress(value: string | null): boolean {
+    return Boolean(value && /^[^\s@]+@[^\s@]+$/.test(value));
   }
 
   // ------------------------------------------------------------------
@@ -604,51 +565,26 @@ class MsgParser {
     return id + type;
   }
 
-  _fileTimeToDate(fileTime: number): Date | null {
+  _fileTimeToDate(fileTime: number | bigint): Date | null {
     try {
       const msSince1601 = Number(fileTime) / 10000;
-      return new Date(msSince1601 - FILETIME_EPOCH_OFFSET);
+      const date = new Date(msSince1601 - FILETIME_EPOCH_OFFSET);
+      return Number.isNaN(date.getTime()) ? null : date;
     } catch {
       return null;
     }
   }
 
-  private _guessValueSize(type: number): number {
-    if (type > 0x1000) return 4;
-    if (type <= 0x0014) return 8;
-    if (type === 0x001e || type === 0x001f || type === 0x0102) return 4;
-    return 0;
-  }
-
   private _parseHeaders(raw: string): Record<string, string> | null {
-    if (!raw) return null;
-    const headers: Record<string, string> = {};
-    let currentKey: string | null = null;
-    const lines = raw.split(/\r?\n/);
-
-    for (const line of lines) {
-      if (/^\s/.test(line) && currentKey) {
-        headers[currentKey] += ' ' + line.trim();
-      } else {
-        const idx = line.indexOf(':');
-        if (idx > 0) {
-          currentKey = line.slice(0, idx).trim().toLowerCase();
-          const value = line.slice(idx + 1).trim();
-          headers[currentKey] = value;
-        } else {
-          currentKey = null;
-        }
-      }
-    }
-
-    return headers;
+    return parseHeaderBlock(raw);
   }
 
   private _parseHeadersFromBody(body: string): Record<string, string> | null {
-    let headerEnd = body.indexOf('\r\n\r\n');
+    const separator = /\r?\n\r?\n/.exec(body);
+    let headerEnd = separator?.index ?? -1;
 
     if (headerEnd === -1) {
-      const lines = body.split('\r\n');
+      const lines = body.split(/\r?\n/);
       let lastHeaderLine = -1;
 
       for (let i = 0; i < lines.length; i++) {
@@ -692,7 +628,7 @@ class MsgParser {
       if (lastHeaderLine >= 0) {
         headerEnd = 0;
         for (let i = 0; i <= lastHeaderLine; i++) {
-          headerEnd += (lines?.[i]?.length || 0) + 2;
+          headerEnd += (lines?.[i]?.length || 0) + (body.includes('\r\n') ? 2 : 1);
         }
       } else {
         return null;
@@ -703,7 +639,7 @@ class MsgParser {
     return this._parseHeaders(headerSection);
   }
 
-  private _parseBinaryHeaders(buf: Buffer): Record<string, string> | null {
+  private _decodeBinaryHeaders(buf: Buffer): string | null {
     if (!buf || buf.length === 0) return null;
 
     let headersText = '';
@@ -711,45 +647,23 @@ class MsgParser {
     if (buf.length >= 4 && buf.readUInt32LE(0) === 0) {
       const remaining = buf.slice(4);
       if (remaining.length > 0) {
-        if (remaining[0] === 0 && remaining[1] !== 0) {
+        if (remaining.length > 1 && remaining[1] === 0) {
           headersText = remaining.toString('ucs2');
         } else {
           headersText = remaining.toString('latin1');
         }
       }
     } else {
-      headersText = buf.toString('latin1');
+      headersText = buf.length > 1 && buf[1] === 0 ? buf.toString('ucs2') : buf.toString('latin1');
     }
 
     headersText = headersText.replace(/^\x00+/, '').replace(/\x00+$/, '');
-    return headersText ? this._parseHeaders(headersText) : null;
+    return headersText || null;
   }
 
   private _parseRecipientsFromHeaders(headers: Record<string, string>): { to: RecipientInfo[]; cc: RecipientInfo[]; bcc: RecipientInfo[] } {
     const parseAddressList = (headerValue: string | undefined): RecipientInfo[] => {
-      if (!headerValue) return [];
-      const result: RecipientInfo[] = [];
-      const addresses = headerValue.split(/,/).map(s => s.trim()).filter(Boolean);
-
-      for (const addr of addresses) {
-        const emailMatch = addr.match(/<([^>]+)>/);
-        if (emailMatch) {
-          const email = emailMatch[1];
-          const name = addr.replace(/<[^>]+>/, '').trim().replace(/^["']|["']$/g, '');
-          result.push({
-            name: name || null,
-            email: email || null,
-            type: null,
-          });
-        } else if (addr.includes('@')) {
-          result.push({
-            name: null,
-            email: addr.trim(),
-            type: null,
-          });
-        }
-      }
-      return result;
+      return parseAddressHeader(headerValue).map(recipient => ({ ...recipient, type: null }));
     };
 
     return {

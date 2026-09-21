@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
-import MsgParser from '../index.js';
+import CFB from 'cfb';
+import EmailParser, { MsgParser } from '../index.js';
 
 describe('MsgParser', () => {
   it('should construct a new instance', () => {
@@ -72,6 +73,7 @@ describe('MsgParser', () => {
       recipients: [],
       attachments: [],
     });
+    assert.strictEqual(result.format, 'msg');
     assert.strictEqual(result.subject, null);
     assert.strictEqual(result.importance, 'normal');
     assert.deepStrictEqual(result.to, []);
@@ -80,6 +82,7 @@ describe('MsgParser', () => {
     assert.deepStrictEqual(result.attachments, []);
     assert.strictEqual(result.body, null);
     assert.strictEqual(result.bodyHtml, null);
+    assert.deepStrictEqual(result.replyTo, []);
   });
 
   it('should parse recipients from internet headers when recipients bucket is empty', () => {
@@ -149,6 +152,20 @@ describe('MsgParser', () => {
     assert.strictEqual(result.to[0].email, 'ozdagdeviren@enka.com');
   });
 
+  it('should parse UTF-16 binary internet headers', () => {
+    const parser = new MsgParser();
+    const binaryHeaders = Buffer.concat([
+      Buffer.alloc(4),
+      Buffer.from('To: unicode@example.com\r\n\0', 'utf16le'),
+    ]);
+    const result = parser._buildResult({
+      properties: { internetHeaders: binaryHeaders },
+      recipients: [],
+      attachments: [],
+    });
+    assert.strictEqual(result.to[0].email, 'unicode@example.com');
+  });
+
   it('should parse recipients from body when internetHeaders is empty', () => {
     const parser = new MsgParser();
     const body = 'Received: from smtp.example.com\r\nTo: <ozdagdeviren@enka.com>\r\nSubject: Test\r\n\r\nDear Ozdagdeviren,\r\nThis is a test email.';
@@ -163,5 +180,95 @@ describe('MsgParser', () => {
     });
     assert.strictEqual(result.to.length, 1);
     assert.strictEqual(result.to[0].email, 'ozdagdeviren@enka.com');
+  });
+
+  it('should read fixed values from 16-byte MSG property entries', () => {
+    const parser = new MsgParser();
+    const stream = Buffer.alloc(32 + 32);
+    stream.writeUInt32LE((0x0017 << 16) | 0x0003, 32);
+    stream.writeInt32LE(2, 40);
+    stream.writeUInt32LE((0x0e08 << 16) | 0x0003, 48);
+    stream.writeInt32LE(1234, 56);
+
+    const read = (parser as unknown as {
+      _readPropertyStream(buffer: Buffer, headerSize: number): Record<string, unknown>;
+    })._readPropertyStream(stream, 32);
+
+    assert.strictEqual(read['00170003'], 2);
+    assert.strictEqual(read['0e080003'], 1234);
+  });
+
+  it('should parse quoted commas and groups in recipient headers', () => {
+    const parser = new MsgParser();
+    const result = parser._buildResult({
+      properties: {
+        internetHeaders: 'To: "Doe, Jane" <jane@example.com>, Team: Bob <bob@example.com>;\r\n',
+      },
+      recipients: [],
+      attachments: [],
+    });
+
+    assert.deepStrictEqual(result.to, [
+      { name: 'Doe, Jane', email: 'jane@example.com' },
+      { name: 'Bob', email: 'bob@example.com' },
+    ]);
+  });
+
+  it('should decode literal LZFu compressed RTF data', () => {
+    const parser = new MsgParser();
+    const rtf = Buffer.from('{\\rtf1}', 'ascii');
+    const compressed = Buffer.alloc(16 + 1 + rtf.length);
+    compressed.writeUInt32LE(compressed.length - 4, 0);
+    compressed.writeUInt32LE(rtf.length, 4);
+    compressed.writeUInt32LE(0x75465a4c, 8);
+    compressed[16] = 0;
+    rtf.copy(compressed, 17);
+
+    const result = parser._buildResult({
+      properties: { bodyRtfCompressed: compressed },
+      recipients: [],
+      attachments: [],
+    });
+    assert.strictEqual(result.bodyRtf, '{\\rtf1}');
+  });
+
+  it('should parse a minimal CFB-backed MSG end to end', async () => {
+    type WritableCfb = ReturnType<typeof CFB.read>;
+    const writableCfb = CFB as unknown as {
+      utils: {
+        cfb_new(): WritableCfb;
+        cfb_add(cfb: WritableCfb, path: string, content: Buffer): void;
+      };
+      write(cfb: WritableCfb, options: { type: 'buffer' }): Buffer;
+    };
+    const container = writableCfb.utils.cfb_new();
+    const properties = Buffer.alloc(48);
+    properties.writeUInt32LE((0x0017 << 16) | 0x0003, 32);
+    properties.writeInt32LE(2, 40);
+
+    const unicode = (value: string): Buffer => Buffer.from(`${value}\0`, 'utf16le');
+    writableCfb.utils.cfb_add(container, '/__properties_version1.0', properties);
+    writableCfb.utils.cfb_add(container, '/__substg1.0_0037001F', unicode('Synthetic message'));
+    writableCfb.utils.cfb_add(container, '/__substg1.0_1000001F', unicode('Synthetic body'));
+    writableCfb.utils.cfb_add(
+      container,
+      '/__substg1.0_007D001F',
+      unicode('From: Sender <sender@example.com>\r\nTo: receiver@example.com\r\nMessage-ID: <synthetic@example.com>\r\n'),
+    );
+
+    const source = writableCfb.write(container, { type: 'buffer' });
+    const result = new MsgParser().parse(source);
+    assert.strictEqual(result.format, 'msg');
+    assert.strictEqual(result.subject, 'Synthetic message');
+    assert.strictEqual(result.body, 'Synthetic body');
+    assert.strictEqual(result.importance, 'high');
+    assert.deepStrictEqual(result.from, { name: 'Sender', email: 'sender@example.com' });
+    assert.deepStrictEqual(result.to, [{ name: null, email: 'receiver@example.com' }]);
+    assert.strictEqual(result.messageId, '<synthetic@example.com>');
+    assert.strictEqual(result.messageSize, source.length);
+
+    const autoDetected = await new EmailParser().parse(source);
+    assert.strictEqual(autoDetected.format, 'msg');
+    assert.strictEqual(autoDetected.subject, 'Synthetic message');
   });
 });

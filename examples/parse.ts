@@ -1,9 +1,9 @@
-import MsgParser from '../index.js';
-import path from 'path';
+import EmailParser from '../index.js';
+import path from 'node:path';
 
 const filePath = process.argv[2];
 if (!filePath) {
-  console.error('Usage: node --import tsx examples/parse.ts <path-to-msg-file>');
+  console.error('Usage: node --import tsx examples/parse.ts <path-to-msg-or-eml-file>');
   process.exit(1);
 }
 
@@ -11,12 +11,13 @@ const absolutePath = path.resolve(filePath);
 console.log('Parsing:', absolutePath);
 console.log('');
 
-const parser = new MsgParser();
+const parser = new EmailParser();
 
 try {
-  const email = parser.parseFile(absolutePath);
+  const email = await parser.parseFile(absolutePath);
 
   console.log('=== Email Summary ===');
+  console.log('Format:         ', email.format.toUpperCase());
   console.log('Subject:        ', email.subject);
   console.log('From:           ', email.from ? `${email.from.name} <${email.from.email}>` : 'N/A');
   console.log('To:             ', email.to.map(r => `${r.name} <${r.email}>`).join('; '));
@@ -59,6 +60,6 @@ try {
     console.log('(none)');
   }
 } catch (err) {
-  console.error('Failed to parse .msg file:', err instanceof Error ? err.message : String(err));
+  console.error('Failed to parse email file:', err instanceof Error ? err.message : String(err));
   process.exit(1);
 }

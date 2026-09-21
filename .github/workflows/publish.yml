@@ -51,8 +51,10 @@ jobs:
 
       - run: npm run build
 
+      - run: npm test
+
       # GitHub Packages 要求作用域包名，临时重命名为 @xiaodaozhi/...（与仓库 owner 一致）
-      - run: npm pkg set name=@xiaodaozhi/xiaodao-msg-parser
+      - run: npm pkg set name=@xiaodaozhi/xiaodao-email-parser
       - run: npm pkg set publishConfig.registry=https://npm.pkg.github.com
 
       - name: Publish to GitHub Packages

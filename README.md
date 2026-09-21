@@ -1,238 +1,242 @@
-# xiaodao-msg-parser
+# xiaodao-email-parser
 
-A Node.js parser for Microsoft Outlook `.msg` files (Compound File Binary / OLE2 format). Extract email metadata, body content, recipients, and attachments from saved Outlook messages.
+面向 Node.js 和 TypeScript 的电子邮件文件解析器，可自动识别并解析：
 
-## Features
+- Outlook `.msg`（Compound File Binary / OLE2 + MAPI）
+- RFC 5322 / MIME `.eml`
 
-- Parse Outlook `.msg` files synchronously
-- Extract email metadata (subject, sender, recipients, dates)
-- Support for plain text, HTML, and RTF body content
-- Attachment extraction with content and metadata
-- Internet headers parsing
-- TypeScript support with full type definitions
-- Zero external runtime dependencies (only `cfb` for OLE2 parsing)
+默认导出的 `EmailParser` 会根据文件内容自动识别格式，并返回一致的 `ParsedEmail` 结构。同时提供专用的 `MsgParser` 和 `EmlParser`，便于只处理单一格式，或将既有同步 MSG 调用迁移到 `xiaodao-email-parser`。
 
-## Installation
+## 功能
+
+- 自动识别 MSG 与 EML，不依赖文件扩展名
+- 解析发件人、回复地址、收件人、主题、日期、重要性和 Message-ID
+- 支持纯文本、HTML 和 MSG 压缩 RTF 正文
+- 支持 multipart、base64、quoted-printable、RFC 2047 编码字和 RFC 2231 文件名
+- 提取普通附件与内嵌附件的内容、MIME 类型和 Content-ID
+- 保留原始邮件头、规范化邮件头和底层格式属性
+- 提供 MIME 嵌套深度、邮件头大小和输入体积限制
+- 完整 TypeScript 类型声明
+
+## 安装
 
 ```bash
-npm install xiaodao-msg-parser
+npm install xiaodao-email-parser
 ```
 
-## Quick Start
+需要 Node.js 18 或更高版本。
+
+## 快速开始：自动识别 MSG / EML
 
 ```typescript
-import MsgParser from 'xiaodao-msg-parser';
+import EmailParser from 'xiaodao-email-parser';
 
-const parser = new MsgParser();
-const email = parser.parseFile('message.msg');
+const parser = new EmailParser();
+const email = await parser.parseFile('message.eml'); // 也可以是 message.msg
 
-console.log('Subject:', email.subject);
-console.log('From:', email.from?.name, '<' + email.from?.email + '>');
-console.log('To:', email.to.map(r => r.email).join(', '));
-console.log('Date:', email.sentDate);
-console.log('Body:', email.body?.slice(0, 200));
+console.log(email.format);      // 'eml' 或 'msg'
+console.log(email.subject);
+console.log(email.from);
+console.log(email.to);
+console.log(email.attachments);
 ```
 
-Or parse from a Buffer:
+也可以解析 `Buffer`：
 
 ```typescript
-import MsgParser from 'xiaodao-msg-parser';
-import fs from 'node:fs';
+import fs from 'node:fs/promises';
+import EmailParser from 'xiaodao-email-parser';
 
-const parser = new MsgParser();
-const buffer = fs.readFileSync('message.msg');
-const email = parser.parse(buffer);
+const source = await fs.readFile('message.msg');
+const email = await new EmailParser().parse(source);
 ```
 
-## API Reference
+统一解析器是异步 API，即使输入是 MSG 也应始终使用 `await`。
+
+## 专用解析器
+
+### 同步解析 MSG
+
+```typescript
+import { MsgParser } from 'xiaodao-email-parser';
+
+const email = new MsgParser().parseFile('message.msg');
+console.log(email.body, email.bodyHtml, email.bodyRtf);
+```
+
+`MsgParser.parse()` 和 `MsgParser.parseFile()` 保持同步，适合从原项目迁移的代码。
+
+### 解析 EML
+
+```typescript
+import { EmlParser } from 'xiaodao-email-parser';
+
+const parser = new EmlParser({
+  maxInputSize: 50 * 1024 * 1024,
+  maxNestingDepth: 50,
+  maxHeadersSize: 2 * 1024 * 1024,
+  maxRfc822NestingDepth: 5,
+});
+
+const email = await parser.parseFile('message.eml');
+```
+
+`EmlParser` 默认最多接受 100 MiB 输入。MIME 解析还带有邮件头总大小和嵌套深度保护。
+
+## API
+
+包导出关系：
+
+```typescript
+import EmailParser, {
+  EmailParser as NamedEmailParser,
+  MsgParser,
+  EmlParser,
+  detectEmailFormat,
+} from 'xiaodao-email-parser';
+```
+
+### `EmailParser`
+
+```typescript
+new EmailParser(options?: EmailParserOptions)
+parser.parse(buffer: Buffer, options?: ParseOptions): Promise<ParsedEmail>
+parser.parseFile(filePath: string, options?: ParseOptions): Promise<ParsedEmail>
+```
+
+默认使用内容自动识别，也可以明确指定格式：
+
+```typescript
+await parser.parse(buffer, { format: 'eml' });
+await parser.parseFile(filePath, { format: 'msg' });
+```
 
 ### `MsgParser`
 
-#### `parseFile(filePath: string): ParsedEmail`
-
-Parse a `.msg` file from a file path (synchronous).
-
 ```typescript
-const email = parser.parseFile('/path/to/message.msg');
+new MsgParser()
+parser.parse(buffer: Buffer): ParsedEmail
+parser.parseFile(filePath: string): ParsedEmail
 ```
 
-#### `parse(buffer: Buffer): ParsedEmail`
+仅处理 Outlook MSG，所有方法都是同步方法。输入不是有效 CFB/MAPI 消息时会抛出描述性错误。
 
-Parse a `.msg` file from a Buffer.
+### `EmlParser`
 
 ```typescript
-const email = parser.parse(buffer);
+new EmlParser(options?: EmlParserOptions)
+parser.parse(buffer: Buffer): Promise<ParsedEmail>
+parser.parseFile(filePath: string): Promise<ParsedEmail>
 ```
+
+仅处理 RFC 5322/MIME EML，支持以下限制选项：
+
+```typescript
+interface EmlParserOptions {
+  maxInputSize?: number;
+  rfc822Attachments?: boolean;
+  forceRfc822Attachments?: boolean;
+  maxNestingDepth?: number;
+  maxHeadersSize?: number;
+  maxRfc822NestingDepth?: number;
+}
+```
+
+### `detectEmailFormat`
+
+```typescript
+import { detectEmailFormat } from 'xiaodao-email-parser';
+
+const format = detectEmailFormat(buffer); // 'msg' | 'eml' | null
+```
+
+MSG 使用 CFB 文件签名识别；EML 使用头部结构与标准邮件头识别。无法可靠判断时返回 `null`，统一解析器则抛出描述性错误。
 
 ### `ParsedEmail`
 
-The parsed email object contains the following fields:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `subject` | `string \| null` | Email subject line |
-| `from` | `EmailRecipient \| null` | Sender information |
-| `to` | `EmailRecipient[]` | To recipients |
-| `cc` | `EmailRecipient[]` | CC recipients |
-| `bcc` | `EmailRecipient[]` | BCC recipients |
-| `body` | `string \| null` | Plain text body |
-| `bodyHtml` | `string \| null` | HTML body |
-| `bodyRtf` | `string \| null` | RTF body |
-| `attachments` | `EmailAttachment[]` | Array of attachments |
-| `sentDate` | `Date \| null` | Date the email was sent |
-| `receivedDate` | `Date \| null` | Date the email was received |
-| `createdDate` | `Date \| null` | Creation date |
-| `modifiedDate` | `Date \| null` | Last modification date |
-| `messageClass` | `string \| null` | Outlook message class (e.g., `IPM.Note`) |
-| `importance` | `'low' \| 'normal' \| 'high' \| null` | Importance level |
-| `messageSize` | `number \| null` | Message size in bytes |
-| `conversationTopic` | `string \| null` | Conversation topic |
-| `headers` | `string \| null` | Raw internet headers |
-| `parsedHeaders` | `Record<string, string> \| null` | Parsed headers as key-value pairs |
-| `preview` | `string \| null` | Preview text |
-| `_rawProperties` | `Record<string, unknown>` | Raw MAPI properties |
-
-### `EmailRecipient`
-
 ```typescript
-interface EmailRecipient {
-  name: string | null;   // Display name
-  email: string | null;  // Email address
+interface ParsedEmail {
+  format: 'msg' | 'eml';
+  subject: string | null;
+  from: EmailRecipient | null;
+  replyTo: EmailRecipient[];
+  to: EmailRecipient[];
+  cc: EmailRecipient[];
+  bcc: EmailRecipient[];
+  body: string | null;
+  bodyHtml: string | null;
+  bodyRtf: string | null;
+  attachments: EmailAttachment[];
+  sentDate: Date | null;
+  receivedDate: Date | null;
+  createdDate: Date | null;
+  modifiedDate: Date | null;
+  messageClass: string | null;
+  importance: 'low' | 'normal' | 'high' | null;
+  messageSize: number | null;
+  conversationTopic: string | null;
+  normalizedSubject: string | null;
+  messageId: string | null;
+  headers: string | null;
+  parsedHeaders: Record<string, string> | null;
+  preview: string | null;
+  _rawProperties: Record<string, unknown>;
 }
 ```
 
-### `EmailAttachment`
+对于 EML，`_rawProperties` 保存 sender、return-path、references 以及未折叠的邮件头数组；对于 MSG，它保存解析后的底层 MAPI 属性。
+
+### 附件
 
 ```typescript
 interface EmailAttachment {
-  filename: string | null;           // File name
-  content: Buffer | null;            // File content as Buffer
-  contentType: string;               // MIME type
-  contentId: string | null;          // Content-ID (for inline images)
-  contentLocation: string | null;    // Content location
-  size: number;                      // Size in bytes
+  filename: string | null;
+  content: Buffer | null;
+  contentType: string;
+  contentId: string | null;
+  contentLocation: string | null;
+  size: number;
 }
 ```
 
-## Examples
-
-### Extract and save attachments
+保存附件示例：
 
 ```typescript
-import MsgParser from 'xiaodao-msg-parser';
-import fs from 'node:fs';
-
-const parser = new MsgParser();
-const email = parser.parseFile('message.msg');
+import fs from 'node:fs/promises';
 
 for (const attachment of email.attachments) {
-  if (attachment.content && attachment.filename) {
-    fs.writeFileSync(attachment.filename, attachment.content);
-    console.log(`Saved: ${attachment.filename} (${attachment.size} bytes)`);
+  if (attachment.filename && attachment.content) {
+    await fs.writeFile(attachment.filename, attachment.content);
   }
 }
 ```
 
-### Get inline images from HTML body
+## 架构
 
-```typescript
-import MsgParser from 'xiaodao-msg-parser';
-
-const parser = new MsgParser();
-const email = parser.parseFile('message.msg');
-
-// Find inline images by Content-ID
-for (const attachment of email.attachments) {
-  if (attachment.contentId) {
-    console.log(`Inline image: cid:${attachment.contentId}`);
-    // Use in HTML: <img src="cid:contentId">
-  }
-}
+```text
+EmailParser (异步、自动识别)
+├── MsgParser (同步、CFB/MAPI)
+└── EmlParser (异步、RFC 5322/MIME)
 ```
 
-### Parse headers for specific information
+两个专用解析器负责各自格式，公共工具统一处理地址、邮件头、主题、预览、日期和 Content-ID，最终都映射到同一结果类型。
 
-```typescript
-import MsgParser from 'xiaodao-msg-parser';
-
-const parser = new MsgParser();
-const email = parser.parseFile('message.msg');
-
-if (email.parsedHeaders) {
-  console.log('Message-ID:', email.parsedHeaders['message-id']);
-  console.log('Return-Path:', email.parsedHeaders['return-path']);
-  console.log('X-Priority:', email.parsedHeaders['x-priority']);
-}
-```
-
-### Handle different body formats
-
-```typescript
-import MsgParser from 'xiaodao-msg-parser';
-
-const parser = new MsgParser();
-const email = parser.parseFile('message.msg');
-
-let bodyContent: string;
-
-if (email.bodyHtml) {
-  // Use HTML body
-  bodyContent = email.bodyHtml;
-} else if (email.body) {
-  // Use plain text body
-  bodyContent = email.body;
-} else if (email.bodyRtf) {
-  // Use RTF body (may need additional processing)
-  bodyContent = email.bodyRtf;
-} else {
-  bodyContent = '(No body content)';
-}
-```
-
-## Development
-
-### Build
+## 开发
 
 ```bash
 npm run build
-```
-
-### Test
-
-```bash
 npm test
-```
-
-### Run example
-
-```bash
 node --import tsx examples/parse.ts path/to/message.msg
+node --import tsx examples/parse.ts path/to/message.eml
 ```
 
-## How It Works
+## 限制
 
-This parser reads the Compound File Binary (CFB/OLE2) structure of `.msg` files and extracts MAPI properties from the following locations:
-
-1. **Top-level properties** - Subject, body, dates, etc.
-2. **Recipient streams** (`__recip_version1.0_#*`) - To, CC, BCC recipients
-3. **Attachment streams** (`__attach_version1.0_#*`) - File attachments
-
-When recipient information is not available in the standard MAPI streams, the parser falls back to extracting recipient information from:
-1. Internet headers (`PidTagInternetHeaders`)
-2. Email body content (when headers contain `To:`, `Cc:`, `Bcc:` fields)
-
-## Limitations
-
-- Only supports synchronous parsing
-- Does not decrypt encrypted or password-protected messages
-- RTF body is returned as-is (no RTF to HTML conversion)
-- Named properties with custom GUIDs are not fully supported
+- 不解密加密或受密码保护的邮件。
+- MSG 自定义命名属性和嵌入式 MSG 附件尚未完整展开。
+- `parsedHeaders` 为兼容旧 API 使用键值对象；重复邮件头会合并。EML 的原始头部数组保存在 `_rawProperties.headers`。
+- 解析器只解析内容，不执行 HTML、脚本或附件。
 
 ## License
 
 MIT
-
-## Related
-
-- [cfb](https://github.com/SheetJS/js-cfb) - Compound File Binary format parser
-- [MAPI Property Tags](https://docs.microsoft.com/en-us/office/client-developer/outlook/mapi/mapi-property-tags) - Microsoft MAPI documentation
