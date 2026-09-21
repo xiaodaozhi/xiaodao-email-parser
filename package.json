@@ -30,7 +30,8 @@
   },
   "sideEffects": false,
   "files": [
-    "dist/"
+    "dist/",
+    "README.ZH.md"
   ],
   "scripts": {
     "build": "tsc",
