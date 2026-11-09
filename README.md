@@ -26,7 +26,7 @@ The default `EmailParser` export detects the format from the file content and re
 npm install xiaodao-email-parser
 ```
 
-Node.js 18 or later is required.
+Node.js 20 or later is required.
 
 ## Quick start: auto-detect MSG or EML
 

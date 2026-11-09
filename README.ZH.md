@@ -26,7 +26,7 @@
 npm install xiaodao-email-parser
 ```
 
-需要 Node.js 18 或更高版本。
+需要 Node.js 20 或更高版本。
 
 ## 快速开始：自动识别 MSG / EML
 

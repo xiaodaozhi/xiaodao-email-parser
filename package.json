@@ -1,6 +1,6 @@
 {
   "name": "xiaodao-email-parser",
-  "version": "1.0.7",
+  "version": "2.0.0",
   "description": "Node.js and TypeScript email parser with auto-detection for Outlook MSG and RFC 5322/MIME EML files",
   "type": "module",
   "license": "MIT",
@@ -36,13 +36,13 @@
   "scripts": {
     "build": "tsc",
     "check": "npm run build && npm test",
-    "test": "node --import tsx --test test/*.test.ts",
+    "test": "node --import tsx --test test/email-parser.test.ts test/msg-parser.test.ts",
     "test:example": "node --import tsx examples/parse.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "cfb": "^1.2.2",
-    "postal-mime": "^3.0.0"
+    "postal-mime": "^4.2.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",
@@ -50,7 +50,7 @@
     "typescript": "^6.0.3"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "publishConfig": {
     "access": "public",
