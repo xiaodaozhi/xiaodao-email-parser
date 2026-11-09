@@ -152,7 +152,7 @@ import { detectEmailFormat } from 'xiaodao-email-parser';
 const format = detectEmailFormat(buffer); // 'msg' | 'eml' | null
 ```
 
-MSG 使用 CFB 文件签名识别；EML 使用头部结构与标准邮件头识别。无法可靠判断时返回 `null`，统一解析器则抛出描述性错误。
+MSG 使用 CFB 文件签名识别，并对可读取的容器检查根目录下的 MAPI 属性流；截断或无法读取的 CFB 容器仍会被视为可能的 MSG，以便解析时报告错误。EML 使用头部结构与标准邮件头识别。无法可靠判断时返回 `null`，统一解析器则抛出描述性错误。
 
 ### `ParsedEmail`
 

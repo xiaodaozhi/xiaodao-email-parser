@@ -2,6 +2,7 @@ import { addressParser, decodeWords } from 'postal-mime';
 import type { Address, Header } from 'postal-mime';
 import type { EmailRecipient } from './types.js';
 
+const HEADER_NAME_PATTERN = /^[!-9;-~]+$/;
 const CODE_PAGE_LABELS: Record<number, string> = {
   65001: 'utf-8',
   1200: 'utf-16le',
@@ -57,8 +58,10 @@ export function headersToRecord(headers: Header[]): Record<string, string> | nul
 
   const result: Record<string, string> = {};
   for (const header of headers) {
-    result[header.key] = result[header.key]
-      ? `${result[header.key]}, ${header.value}`
+    if (!HEADER_NAME_PATTERN.test(header.key)) continue;
+    const key = header.key.toLowerCase();
+    result[key] = result[key]
+      ? `${result[key]}, ${header.value}`
       : header.value;
   }
   return result;
@@ -67,8 +70,14 @@ export function headersToRecord(headers: Header[]): Record<string, string> | nul
 export function extractRawHeaders(buffer: Buffer): string | null {
   const source = buffer.toString('latin1');
   const match = /\r?\n\r?\n/.exec(source);
-  if (!match || match.index === 0) return null;
-  return source.slice(0, match.index);
+  const headerEnd = match?.index ?? source.length;
+  if (headerEnd === 0 || !source.slice(0, headerEnd).trim()) return null;
+  return source.slice(0, headerEnd);
+}
+
+export function decodeMimeWords(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return decodeWords(value);
 }
 
 function flattenAddresses(addresses: Address[]): EmailRecipient[] {
@@ -124,7 +133,9 @@ export function normalizeSubject(subject: string | null | undefined): string | n
 }
 
 export function createPreview(text: string | null | undefined, html?: string | null): string | null {
-  const source = text || html?.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
+  const source = text?.trim()
+    ? text
+    : html?.replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, ' ')
     .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, ' ')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&nbsp;/gi, ' ')

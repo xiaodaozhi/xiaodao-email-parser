@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import CFB from 'cfb';
 import EmlParser from './eml-parser.js';
 import MsgParser from './msg-parser.js';
 import type {
@@ -19,19 +20,53 @@ export function detectEmailFormat(buffer: Buffer): EmailFormat | null {
     throw new TypeError('Input must be a Buffer.');
   }
   if (buffer.length >= CFB_SIGNATURE.length && buffer.subarray(0, 8).equals(CFB_SIGNATURE)) {
-    return 'msg';
+    // A CFB signature is shared by Outlook MSG, Word DOC and several other
+    // compound documents. Confirm the MAPI property stream when the container
+    // is readable, while preserving a useful MSG error for truncated inputs.
+    if (buffer.length < 512) return 'msg';
+    try {
+      const cfb = CFB.read(buffer, { type: 'buffer' });
+      const rootIndex = cfb.FileIndex.findIndex(entry => entry.type === 5);
+      const root = cfb.FullPaths[rootIndex]?.replace(/\/?$/, '/');
+      const hasMapiProperties = root && cfb.FullPaths.some(path =>
+        path.toLowerCase() === `${root}__properties_version1.0`.toLowerCase(),
+      );
+      return hasMapiProperties ? 'msg' : null;
+    } catch {
+      return 'msg';
+    }
   }
 
-  const headerSample = buffer.subarray(0, Math.min(buffer.length, 256 * 1024)).toString('latin1');
+  const sampleSize = Math.min(buffer.length, 256 * 1024);
+  const headerSample = buffer.subarray(0, sampleSize).toString('latin1');
   const boundary = /\r?\n\r?\n/.exec(headerSample);
-  if (!boundary) return null;
+  // A header-only RFC 5322 message may end immediately after the last header
+  // line, without the empty line that would normally separate the body.
+  if (!boundary && sampleSize !== buffer.length) return null;
+
+  const headerEnd = boundary?.index ?? headerSample.length;
 
   let validHeaders = 0;
   let knownHeaders = 0;
-  for (const line of headerSample.slice(0, boundary.index).split(/\r?\n/)) {
-    if (/^[ \t]/.test(line)) continue;
+  let hasHeader = false;
+  let canUseMboxSeparator = true;
+  for (const line of headerSample.slice(0, headerEnd).split(/\r?\n/)) {
+    if (!line) continue;
+    if (/^[ \t]/.test(line)) {
+      if (!hasHeader) return null;
+      continue;
+    }
     const match = /^([!-9;-~]+)\s*:/.exec(line);
-    if (!match) continue;
+    if (!match) {
+      // Accept the optional Unix mbox envelope line before RFC 5322 headers.
+      if (canUseMboxSeparator && /^From\s+\S/.test(line)) {
+        canUseMboxSeparator = false;
+        continue;
+      }
+      return null;
+    }
+    hasHeader = true;
+    canUseMboxSeparator = false;
     validHeaders++;
     if (KNOWN_EML_HEADERS.has(match[1].toLowerCase())) knownHeaders++;
   }

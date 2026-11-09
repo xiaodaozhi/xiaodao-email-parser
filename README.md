@@ -152,7 +152,7 @@ import { detectEmailFormat } from 'xiaodao-email-parser';
 const format = detectEmailFormat(buffer); // 'msg' | 'eml' | null
 ```
 
-MSG detection uses the CFB signature. EML detection checks the header structure and known email headers. The function returns `null` when it cannot determine the format reliably; the unified parser throws a descriptive error in that case.
+MSG detection checks the CFB signature and, for readable containers, the root MAPI property stream. A truncated or unreadable CFB container is still treated as a possible MSG so parsing can report the error. EML detection checks the header structure and known email headers. The function returns `null` when it cannot determine the format reliably; the unified parser throws a descriptive error in that case.
 
 ### `ParsedEmail`
 

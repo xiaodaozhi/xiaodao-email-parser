@@ -9,11 +9,13 @@ import {
 } from './constants.js';
 import {
   createPreview,
+  decodeMimeWords,
   decodeBuffer,
   normalizeContentId,
   normalizeSubject,
   parseAddressHeader,
   parseHeaderBlock,
+  parseImportance,
   toValidDate,
 } from './email-utils.js';
 import { decompressRtf } from './rtf.js';
@@ -486,10 +488,10 @@ class MsgParser {
       }
     }
 
-    const subject = (p.subject as string) || parsedHeaders?.subject || null;
+    const subject = (p.subject as string) || decodeMimeWords(parsedHeaders?.subject);
     const importance = p.importance === 'low' || p.importance === 'high' || p.importance === 'normal'
       ? p.importance
-      : 'normal';
+      : parseImportance(parsedHeaders);
 
     return {
       format: 'msg',
@@ -510,7 +512,7 @@ class MsgParser {
       messageClass: (p.messageClass as string) || null,
       importance,
       messageSize: typeof p.messageSize === 'number' ? p.messageSize : (raw.size ?? null),
-      conversationTopic: (p.conversationTopic as string) || null,
+      conversationTopic: (p.conversationTopic as string) || decodeMimeWords(parsedHeaders?.['thread-topic']),
       normalizedSubject: (p.normalizedSubject as string) || normalizeSubject(subject),
       messageId: parsedHeaders?.['message-id'] || null,
       headers: rawHeaders,

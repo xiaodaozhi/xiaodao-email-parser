@@ -4,6 +4,7 @@ import type { PostalMimeOptions } from 'postal-mime';
 import {
   addressToRecipients,
   createPreview,
+  decodeMimeWords,
   extractRawHeaders,
   headersToRecord,
   normalizeContentId,
@@ -84,7 +85,7 @@ class EmlParser {
       messageClass: null,
       importance: parseImportance(parsedHeaders),
       messageSize: buffer.length,
-      conversationTopic: parsedHeaders?.['thread-topic'] || null,
+      conversationTopic: decodeMimeWords(parsedHeaders?.['thread-topic']),
       normalizedSubject: normalizeSubject(email.subject),
       messageId: email.messageId || null,
       headers: extractRawHeaders(buffer),

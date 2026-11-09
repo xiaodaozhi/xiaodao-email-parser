@@ -54,6 +54,38 @@ describe('MsgParser', () => {
     assert.ok(headers.date);
   });
 
+  it('should decode an encoded subject from internet headers', () => {
+    const parser = new MsgParser();
+    const result = parser._buildResult({
+      properties: {
+        internetHeaders: 'Subject: =?UTF-8?B?5rWL6K+V6YKu5Lu2?=\r\n',
+      },
+      recipients: [],
+      attachments: [],
+    });
+
+    assert.strictEqual(result.subject, '测试邮件');
+    assert.strictEqual(result.parsedHeaders?.subject, '=?UTF-8?B?5rWL6K+V6YKu5Lu2?=');
+  });
+
+  it('should use internet-header metadata when MAPI metadata is absent', () => {
+    const parser = new MsgParser();
+    const result = parser._buildResult({
+      properties: {
+        internetHeaders: [
+          'Importance: high',
+          'Thread-Topic: =?UTF-8?B?5rWL6K+V6YKu5Lu2?=',
+          '',
+        ].join('\r\n'),
+      },
+      recipients: [],
+      attachments: [],
+    });
+
+    assert.strictEqual(result.importance, 'high');
+    assert.strictEqual(result.conversationTopic, '测试邮件');
+  });
+
   it('should handle attachment parsing with empty attachments bucket', () => {
     const parser = new MsgParser();
     const attachments = parser._parseAttachments();
