@@ -1,6 +1,6 @@
 {
   "name": "xiaodao-email-parser",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Node.js and TypeScript email parser with auto-detection for Outlook MSG and RFC 5322/MIME EML files",
   "type": "module",
   "license": "MIT",

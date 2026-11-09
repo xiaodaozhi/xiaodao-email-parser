@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -19,7 +20,8 @@ jobs:
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org/
-          cache: npm
+
+      - run: npm --version
 
       - run: npm ci
 
@@ -29,8 +31,6 @@ jobs:
 
       - name: Publish to npmjs.org
         run: npm publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   publish-github:
     name: Publish to GitHub Packages
