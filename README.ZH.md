@@ -1,5 +1,12 @@
 # xiaodao-email-parser
 
+[![npm version](https://img.shields.io/npm/v/xiaodao-email-parser)](https://www.npmjs.com/package/xiaodao-email-parser)
+[![npm downloads](https://img.shields.io/npm/dm/xiaodao-email-parser)](https://www.npmjs.com/package/xiaodao-email-parser)
+[![CI](https://github.com/xiaodaozhi/xiaodao-email-parser/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/xiaodaozhi/xiaodao-email-parser/actions/workflows/ci.yml)
+[![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js version](https://img.shields.io/npm/node/v/xiaodao-email-parser)](https://www.npmjs.com/package/xiaodao-email-parser)
+[![License](https://img.shields.io/npm/l/xiaodao-email-parser)](LICENSE)
+
 [English](README.md) | 简体中文
 
 面向 Node.js 和 TypeScript 的电子邮件文件解析器，可自动识别并解析：
