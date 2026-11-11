@@ -33,7 +33,11 @@ The default `EmailParser` export detects the format from the file content and re
 npm install xiaodao-email-parser
 ```
 
-Node.js 20 or later is required.
+Node.js 20 or later is required. The package is published as an ES module. To run the JavaScript-compatible quick-start examples, use an `.mjs` file or set `"type": "module"` in your project's `package.json`.
+
+### Upgrading from 1.0.7
+
+Version 2 requires Node.js 20 or later, up from Node.js 18 in 1.0.7. `EmailParser` remains asynchronous, so continue to use `await`; `MsgParser` remains synchronous. If you rely on MIME parsing details or nested messages, test those cases when upgrading: the underlying `postal-mime` dependency was updated from 3.x to 4.x.
 
 ## Quick start: auto-detect MSG or EML
 
@@ -50,6 +54,8 @@ console.log(email.to);
 console.log(email.attachments);
 ```
 
+For example, an EML message might produce `format: 'eml'`, subject `'Meeting'`, sender `{ name: 'Alice', email: 'alice@example.com' }`, and an empty attachments array. Values depend on the message; missing fields can be `null` or empty arrays.
+
 You can also parse a `Buffer`:
 
 ```typescript
@@ -61,6 +67,19 @@ const email = await new EmailParser().parse(source);
 ```
 
 The unified parser always uses an asynchronous API, including when the detected input is MSG.
+
+File reads and parsing can fail. Handle the rejected promise, for example:
+
+```typescript
+try {
+  const email = await new EmailParser().parseFile('message.eml');
+  console.log(email.subject);
+} catch (error) {
+  console.error('Could not read or parse the email:', error);
+}
+```
+
+Failures can include an unreadable file, an unrecognized or invalid message, or an EML size or MIME limit being exceeded.
 
 ## Dedicated parsers
 
@@ -90,7 +109,7 @@ const parser = new EmlParser({
 const email = await parser.parseFile('message.eml');
 ```
 
-`EmlParser` accepts inputs up to 100 MiB by default. MIME parsing also includes aggregate header-size and nesting-depth protection.
+`EmlParser` accepts inputs up to 100 MiB by default. This limit applies to EML only; `MsgParser` has no equivalent input-size option. Both `parseFile()` implementations read the entire file into memory before parsing, so the EML limit is checked after the read. For untrusted files, enforce a size limit before loading their contents and account for possible file changes between checking and reading.
 
 ## API
 
@@ -138,7 +157,7 @@ parser.parse(buffer: Buffer): Promise<ParsedEmail>
 parser.parseFile(filePath: string): Promise<ParsedEmail>
 ```
 
-Parses RFC 5322/MIME EML only. The following limits can be configured:
+Parses RFC 5322/MIME EML only. The following options can be configured:
 
 ```typescript
 interface EmlParserOptions {
@@ -149,6 +168,24 @@ interface EmlParserOptions {
   maxHeadersSize?: number;
   maxRfc822NestingDepth?: number;
 }
+```
+
+| Option | Default | Behavior |
+| --- | --- | --- |
+| `maxInputSize` | 100 MiB | Maximum EML input size in bytes; must be a positive safe integer. |
+| `rfc822Attachments` | `false` | Treat `message/rfc822` parts without a Content-Disposition as attachments. |
+| `forceRfc822Attachments` | `false` | Treat all `message/rfc822` parts as attachments. |
+| `maxNestingDepth` | `256` | Maximum MIME part nesting depth. |
+| `maxHeadersSize` | `2097152` | Maximum total header size in bytes across MIME parts and inline nested messages. |
+| `maxRfc822NestingDepth` | `10` | Maximum inline `message/rfc822` recursion depth; deeper messages are returned as attachments. Set to `0` to disable inline parsing. |
+
+The MIME option defaults above come from the current `postal-mime` 4.2.x dependency. To configure EML parsing through the unified parser, pass the same options under `eml`:
+
+```typescript
+const parser = new EmailParser({
+  eml: { maxInputSize: 20 * 1024 * 1024, maxNestingDepth: 50 },
+});
+const email = await parser.parseFile('message.eml');
 ```
 
 ### `detectEmailFormat`
@@ -195,6 +232,8 @@ interface ParsedEmail {
 
 For EML, `_rawProperties` contains sender, return-path, references, and the unfolded header array. For MSG, it contains the resolved low-level MAPI properties.
 
+Each `EmailRecipient` has a nullable `name` and `email`. The `from` field is either one such address object or `null`; `replyTo`, `to`, `cc`, and `bcc` are arrays and may be empty.
+
 ### Attachments
 
 ```typescript
@@ -208,17 +247,24 @@ interface EmailAttachment {
 }
 ```
 
-Example: save all named attachments.
+Example: save available attachment contents to a newly created temporary directory. The generated names avoid trusting filenames from the message; `wx` also prevents overwriting an existing file.
 
 ```typescript
 import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 
-for (const attachment of email.attachments) {
-  if (attachment.filename && attachment.content) {
-    await fs.writeFile(attachment.filename, attachment.content);
+const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), 'email-attachments-'));
+for (const [index, attachment] of email.attachments.entries()) {
+  if (attachment.content !== null) {
+    const outputPath = path.join(outputDir, `attachment-${index}`);
+    await fs.writeFile(outputPath, attachment.content, { flag: 'wx' });
+    console.log('Saved:', outputPath, 'Original name:', attachment.filename);
   }
 }
 ```
+
+Attachment names and contents come from the message and should be treated as untrusted. If you need to preserve original names or file extensions, validate them according to your application's storage and security requirements.
 
 ## Architecture
 
@@ -233,6 +279,7 @@ Each dedicated parser owns its format-specific decoding. Shared utilities normal
 ## Development
 
 ```bash
+npm ci
 npm run build
 npm test
 node --import tsx examples/parse.ts path/to/message.msg
@@ -243,8 +290,9 @@ node --import tsx examples/parse.ts path/to/message.eml
 
 - Encrypted and password-protected messages are not decrypted.
 - MSG custom named properties and embedded MSG attachments are not fully expanded yet.
+- Nested EML messages beyond `maxRfc822NestingDepth` are returned as attachments rather than expanded inline. The underlying parser's `rfc822DepthExceeded` flag is not exposed in `EmailAttachment`; do not assume the attachment list contains every deeply nested payload when scanning mail.
 - For backward compatibility, `parsedHeaders` is a key-value object and repeated headers are merged. The original EML header array is available at `_rawProperties.headers`.
-- The parser only extracts content; it never executes HTML, scripts, or attachments.
+- The parser only extracts content; it never executes HTML, scripts, or attachments. Treat `bodyHtml` as untrusted and sanitize it before rendering in a web page.
 
 ## License
 
