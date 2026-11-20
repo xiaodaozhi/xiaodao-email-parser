@@ -279,9 +279,16 @@ describe('MsgParser', () => {
     properties.writeInt32LE(2, 40);
 
     const unicode = (value: string): Buffer => Buffer.from(`${value}\0`, 'utf16le');
+    // [MS-OXRTFCP] §3.1.1, including references into the initial LZFu dictionary.
+    const compressedRtf = Buffer.from(
+      '2d0000002b0000004c5a4675f1c5c7a703000a007263706731323542320af32068656c090020627705b06c647d0a800fa0',
+      'hex',
+    );
+    const expectedRtf = '{\\rtf1\\ansi\\ansicpg1252\\pard hello world}\r\n';
     writableCfb.utils.cfb_add(container, '/__properties_version1.0', properties);
     writableCfb.utils.cfb_add(container, '/__substg1.0_0037001F', unicode('Synthetic message'));
     writableCfb.utils.cfb_add(container, '/__substg1.0_1000001F', unicode('Synthetic body'));
+    writableCfb.utils.cfb_add(container, '/__substg1.0_10090102', compressedRtf);
     writableCfb.utils.cfb_add(
       container,
       '/__substg1.0_007D001F',
@@ -293,6 +300,7 @@ describe('MsgParser', () => {
     assert.strictEqual(result.format, 'msg');
     assert.strictEqual(result.subject, 'Synthetic message');
     assert.strictEqual(result.body, 'Synthetic body');
+    assert.strictEqual(result.bodyRtf, expectedRtf);
     assert.strictEqual(result.importance, 'high');
     assert.deepStrictEqual(result.from, { name: 'Sender', email: 'sender@example.com' });
     assert.deepStrictEqual(result.to, [{ name: null, email: 'receiver@example.com' }]);
@@ -302,5 +310,6 @@ describe('MsgParser', () => {
     const autoDetected = await new EmailParser().parse(source);
     assert.strictEqual(autoDetected.format, 'msg');
     assert.strictEqual(autoDetected.subject, 'Synthetic message');
+    assert.strictEqual(autoDetected.bodyRtf, expectedRtf);
   });
 });
